@@ -1,0 +1,27 @@
+package models
+
+import (
+	"encoding/json"
+	"time"
+)
+
+type Post struct {
+	ID        string          `json:"id"`
+	Author    string          `json:"author"`
+	Title     string          `json:"title"`
+	Slug      string          `json:"slug"`
+	Summary   string          `json:"summary"`
+	Tags      []string        `json:"tags"`
+	Content   json.RawMessage `json:"content"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type PostListItem struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	Title     string    `json:"title"`
+	Slug      string    `json:"slug"`
+	Summary   string    `json:"summary"`
+	Tags      []string  `json:"tags"`
+	CreatedAt time.Time `json:"created_at"`
+}
