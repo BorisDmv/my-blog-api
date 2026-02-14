@@ -48,11 +48,19 @@ func main() {
 	postsHandler := handlers.NewPostsHandler(store)
 
 	r.Route("/api", func(r chi.Router) {
+		r.Post("/login", handlers.Login)
+		r.Post("/signup", handlers.Signup)
 		r.Get("/posts", postsHandler.ListPublic)
 		r.Get("/post", postsHandler.GetByID)
 		r.Get("/post/{slug}", postsHandler.GetBySlug)
 		r.Get("/post/slug", postsHandler.GetBySlug)
 		r.Get("/post/slug/{slug}", postsHandler.GetBySlug)
+
+		// JWT-protected create post
+		r.Group(func(r chi.Router) {
+			r.Use(handlers.JWTAuth)
+			r.Post("/posts", postsHandler.Create)
+		})
 
 		r.Route("/private", func(r chi.Router) {
 			r.Use(appmiddleware.Auth(cfg.AuthToken))

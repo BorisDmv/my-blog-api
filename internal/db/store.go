@@ -103,6 +103,7 @@ func (s *Store) GetPostByID(ctx context.Context, id string) (*models.Post, error
 			COALESCE(summary, ''),
 			COALESCE(tags, '{}'::text[]),
 			content,
+			status,
 			created_at
 		FROM posts
 		WHERE id = $1
@@ -116,6 +117,7 @@ func (s *Store) GetPostByID(ctx context.Context, id string) (*models.Post, error
 		&post.Summary,
 		&post.Tags,
 		&post.Content,
+		&post.Status,
 		&post.CreatedAt,
 	)
 	if err != nil {
@@ -140,6 +142,7 @@ func (s *Store) GetPostBySlug(ctx context.Context, slug string) (*models.Post, e
 			COALESCE(summary, ''),
 			COALESCE(tags, '{}'::text[]),
 			content,
+			status,
 			created_at
 		FROM posts
 		WHERE slug = $1
@@ -153,6 +156,7 @@ func (s *Store) GetPostBySlug(ctx context.Context, slug string) (*models.Post, e
 		&post.Summary,
 		&post.Tags,
 		&post.Content,
+		&post.Status,
 		&post.CreatedAt,
 	)
 	if err != nil {
@@ -162,4 +166,53 @@ func (s *Store) GetPostBySlug(ctx context.Context, slug string) (*models.Post, e
 		return nil, fmt.Errorf("get post by slug: %w", err)
 	}
 	return &post, nil
+}
+
+func (s *Store) CreatePost(ctx context.Context, post models.Post) (*models.Post, error) {
+	if s.pool == nil {
+		return nil, errors.New("db not initialized")
+	}
+
+	const query = `
+		INSERT INTO posts (author, title, slug, summary, tags, content, status)
+		VALUES ($1, $2, $3, $4, $5, $6, COALESCE(NULLIF($7, ''), 'draft'))
+		RETURNING
+			id::text,
+			author,
+			title,
+			slug,
+			COALESCE(summary, ''),
+			COALESCE(tags, '{}'::text[]),
+			content,
+			status,
+			created_at
+	`
+
+	var created models.Post
+	err := s.pool.QueryRow(
+		ctx,
+		query,
+		post.Author,
+		post.Title,
+		post.Slug,
+		post.Summary,
+		post.Tags,
+		post.Content,
+		post.Status,
+	).Scan(
+		&created.ID,
+		&created.Author,
+		&created.Title,
+		&created.Slug,
+		&created.Summary,
+		&created.Tags,
+		&created.Content,
+		&created.Status,
+		&created.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create post: %w", err)
+	}
+
+	return &created, nil
 }

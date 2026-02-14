@@ -13,6 +13,7 @@ type Post struct {
 	Summary   string          `json:"summary"`
 	Tags      []string        `json:"tags"`
 	Content   json.RawMessage `json:"content"`
+	Status    string          `json:"status"`
 	CreatedAt time.Time       `json:"created_at"`
 }
 
