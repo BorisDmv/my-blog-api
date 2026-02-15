@@ -1,13 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,8 +23,22 @@ func getJWTSecret() []byte {
 	return []byte(os.Getenv("JWT_SECRET"))
 }
 
-func getPasswordHash() string {
-	return strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH"))
+type contextKey string
+
+const storeContextKey contextKey = "store"
+
+func WithStore(store *db.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), storeContextKey, store)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func getStore(r *http.Request) (*db.Store, bool) {
+	store, ok := r.Context().Value(storeContextKey).(*db.Store)
+	return store, ok && store != nil
 }
 
 type LoginRequest struct {
@@ -45,15 +60,16 @@ type SignupResponse struct {
 	PasswordHash string `json:"password_hash"`
 }
 
-// Demo: Accepts any username/password, returns JWT.
+// Login authenticates a user from the DB and returns a JWT.
 func Login(w http.ResponseWriter, r *http.Request) {
 	jwtSecret := getJWTSecret()
 	if len(jwtSecret) == 0 {
 		respondError(w, http.StatusInternalServerError, "JWT secret not set")
 		return
 	}
-	if getPasswordHash() == "" {
-		respondError(w, http.StatusInternalServerError, "admin password hash not set")
+	store, ok := getStore(r)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, "store not available")
 		return
 	}
 	var req LoginRequest
@@ -61,14 +77,25 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if !verifyPassword(req.Password) {
+	if req.Username == "" || req.Password == "" {
+		respondError(w, http.StatusBadRequest, "username and password required")
+		return
+	}
+	user, err := store.GetUserByUsername(r.Context(), req.Username)
+	if err != nil {
+		log.Printf("login db error: %v", err)
+		respondError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if user == nil || !checkPasswordHash(req.Password, user.PasswordHash) {
 		respondError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": req.Username,
-		"exp": time.Now().Add(24 * time.Hour).Unix(),
+		"sub":      user.ID,
+		"username": user.Username,
+		"exp":      time.Now().Add(24 * time.Hour).Unix(),
 	})
 	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
@@ -78,17 +105,44 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, LoginResponse{Token: tokenString})
 }
 
-// Demo: Signup returns username and password hash (no DB persistence).
+// Signup creates a new user in the DB.
 func Signup(w http.ResponseWriter, r *http.Request) {
+	store, ok := getStore(r)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, "store not available")
+		return
+	}
 	var req SignupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if req.Username == "" || req.Password == "" {
+		respondError(w, http.StatusBadRequest, "username and password required")
+		return
+	}
+	existing, err := store.GetUserByUsername(r.Context(), req.Username)
+	if err != nil {
+		log.Printf("signup db error: %v", err)
+		respondError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if existing != nil {
+		respondError(w, http.StatusConflict, "username already exists")
+		return
+	}
 	hash := hashPassword(req.Password)
-	respondJSON(w, http.StatusOK, SignupResponse{
+	created, err := store.CreateUser(r.Context(), models.User{
 		Username:     req.Username,
 		PasswordHash: hash,
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+	respondJSON(w, http.StatusOK, SignupResponse{
+		Username:     created.Username,
+		PasswordHash: created.PasswordHash,
 	})
 }
 
@@ -98,12 +152,8 @@ func hashPassword(password string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func verifyPassword(password string) bool {
-	expected := getPasswordHash()
-	if expected == "" {
-		return false
-	}
-	return hashPassword(password) == expected
+func checkPasswordHash(password, hash string) bool {
+	return hashPassword(password) == hash
 }
 
 // Auth middleware for JWT.
@@ -171,6 +221,37 @@ func (h *PostsHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
 	posts, total, err := h.store.ListPosts(r.Context(), limit, offset)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to load posts")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, PostsResponse{
+		Data:  posts,
+		Page:  page,
+		Limit: limit,
+		Total: total,
+	})
+}
+
+func (h *PostsHandler) Search(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		query = r.URL.Query().Get("query")
+	}
+	if query == "" {
+		respondError(w, http.StatusBadRequest, "missing search query")
+		return
+	}
+
+	page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+	limit := parsePositiveInt(r.URL.Query().Get("limit"), 10)
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	posts, total, err := h.store.SearchPosts(r.Context(), query, limit, offset)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to search posts")
 		return
 	}
 

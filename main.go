@@ -48,9 +48,11 @@ func main() {
 	postsHandler := handlers.NewPostsHandler(store)
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(handlers.WithStore(store))
 		r.Post("/login", handlers.Login)
 		r.Post("/signup", handlers.Signup)
 		r.Get("/posts", postsHandler.ListPublic)
+		r.Get("/posts/search", postsHandler.Search)
 		r.Get("/post", postsHandler.GetByID)
 		r.Get("/post/{slug}", postsHandler.GetBySlug)
 		r.Get("/post/slug", postsHandler.GetBySlug)
