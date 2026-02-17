@@ -49,10 +49,17 @@ func main() {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(handlers.WithStore(store))
-		r.Post("/login", handlers.Login)
+
+		// In-memory rate limiter: 5 login attempts per minute per IP
+		loginRateLimiter := appmiddleware.NewRateLimiter(5, time.Minute)
+		r.With(loginRateLimiter.Limit).Post("/login", handlers.Login)
+
 		r.Post("/signup", handlers.Signup)
-		r.Get("/posts", postsHandler.ListPublic)
-		r.Get("/posts/search", postsHandler.Search)
+
+		// Less restrictive rate limiter: 30 requests per minute per IP for public posts and search
+		publicLimiter := appmiddleware.NewRateLimiter(30, time.Minute)
+		r.With(publicLimiter.Limit).Get("/posts", postsHandler.ListPublic)
+		r.With(publicLimiter.Limit).Get("/posts/search", postsHandler.Search)
 		r.Get("/post", postsHandler.GetByID)
 		r.Get("/post/{slug}", postsHandler.GetBySlug)
 		r.Get("/post/slug", postsHandler.GetBySlug)

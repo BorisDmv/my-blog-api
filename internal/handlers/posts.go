@@ -60,6 +60,26 @@ type SignupResponse struct {
 	PasswordHash string `json:"password_hash"`
 }
 
+// Checks if the request is authenticated (valid JWT in Authorization header)
+func isAuthenticated(r *http.Request) bool {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
+		return false
+	}
+	tokenStr := authHeader[7:]
+	jwtSecret := getJWTSecret()
+	if len(jwtSecret) == 0 {
+		return false
+	}
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return jwtSecret, nil
+	})
+	return err == nil && token.Valid
+}
+
 // Login authenticates a user from the DB and returns a JWT.
 func Login(w http.ResponseWriter, r *http.Request) {
 	jwtSecret := getJWTSecret()
@@ -189,10 +209,11 @@ type PostsHandler struct {
 }
 
 type PostsResponse struct {
-	Data  interface{} `json:"data"`
-	Page  int         `json:"page"`
-	Limit int         `json:"limit"`
-	Total int         `json:"total"`
+	Data   interface{} `json:"data"`
+	Page   int         `json:"page"`
+	Limit  int         `json:"limit"`
+	Total  int         `json:"total"`
+	Status string      `json:"status"`
 }
 
 type CreatePostRequest struct {
@@ -202,7 +223,8 @@ type CreatePostRequest struct {
 	Summary string          `json:"summary"`
 	Tags    []string        `json:"tags"`
 	Content json.RawMessage `json:"content"`
-	Status  string          `json:"status"`
+	// Status can be "draft" or "published". Defaults to "draft" if not set or invalid.
+	Status string `json:"status"`
 }
 
 func NewPostsHandler(store *db.Store) *PostsHandler {
@@ -218,17 +240,22 @@ func (h *PostsHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
 
 	offset := (page - 1) * limit
 
-	posts, total, err := h.store.ListPosts(r.Context(), limit, offset)
+	ctx := r.Context()
+	if isAuthenticated(r) {
+		ctx = context.WithValue(ctx, "includeDrafts", true)
+	}
+	posts, total, err := h.store.ListPosts(ctx, limit, offset)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to load posts")
 		return
 	}
 
 	respondJSON(w, http.StatusOK, PostsResponse{
-		Data:  posts,
-		Page:  page,
-		Limit: limit,
-		Total: total,
+		Data:   posts,
+		Page:   page,
+		Limit:  limit,
+		Total:  total,
+		Status: "success",
 	})
 }
 
@@ -249,17 +276,22 @@ func (h *PostsHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 
-	posts, total, err := h.store.SearchPosts(r.Context(), query, limit, offset)
+	ctx := r.Context()
+	if isAuthenticated(r) {
+		ctx = context.WithValue(ctx, "includeDrafts", true)
+	}
+	posts, total, err := h.store.SearchPosts(ctx, query, limit, offset)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to search posts")
 		return
 	}
 
 	respondJSON(w, http.StatusOK, PostsResponse{
-		Data:  posts,
-		Page:  page,
-		Limit: limit,
-		Total: total,
+		Data:   posts,
+		Page:   page,
+		Limit:  limit,
+		Total:  total,
+		Status: "success",
 	})
 }
 
@@ -318,6 +350,11 @@ func (h *PostsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only allow "draft" or "published" for status, default to "draft"
+	status := req.Status
+	if status != "published" && status != "draft" {
+		status = "draft"
+	}
 	created, err := h.store.CreatePost(r.Context(), models.Post{
 		Author:  req.Author,
 		Title:   req.Title,
@@ -325,10 +362,19 @@ func (h *PostsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Summary: req.Summary,
 		Tags:    req.Tags,
 		Content: req.Content,
-		Status:  req.Status,
+		Status:  status,
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to create post")
+		log.Printf("CreatePost error: %v", err)
+		// Check for unique constraint violation (SQLSTATE 23505)
+		if err.Error() != "" && ((len(err.Error()) > 27 && err.Error()[len(err.Error())-8:] == "23505)") ||
+			(len(err.Error()) > 38 && err.Error()[0:38] == "create post: ERROR: duplicate key value") ||
+			(len(err.Error()) > 60 && err.Error()[0:60] == "create post: ERROR: duplicate key value violates unique constraint") ||
+			(len(err.Error()) > 0 && err.Error() == "pq: duplicate key value violates unique constraint \"posts_slug_key\"")) {
+			respondError(w, http.StatusConflict, "A post with this slug already exists.")
+		} else {
+			respondError(w, http.StatusInternalServerError, "failed to create post")
+		}
 		return
 	}
 	respondJSON(w, http.StatusCreated, created)

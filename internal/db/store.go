@@ -38,20 +38,41 @@ func (s *Store) ListPosts(ctx context.Context, limit, offset int) ([]models.Post
 		return nil, 0, errors.New("db not initialized")
 	}
 
-	const listQuery = `
-		SELECT
-			id::text,
-			author,
-			title,
-			slug,
-			COALESCE(summary, ''),
-			COALESCE(tags, '{}'::text[]),
-			created_at
-		FROM posts
-		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
-	`
-
+	// If context has key "includeDrafts" true, return all, else only published
+	includeDrafts, _ := ctx.Value("includeDrafts").(bool)
+	var listQuery string
+	if includeDrafts {
+		listQuery = `
+				       SELECT
+					       id::text,
+					       author,
+					       title,
+					       slug,
+					       COALESCE(summary, ''),
+					       COALESCE(tags, '{}'::text[]),
+					       status,
+					       created_at
+				       FROM posts
+				       ORDER BY created_at DESC
+				       LIMIT $1 OFFSET $2
+			       `
+	} else {
+		listQuery = `
+				       SELECT
+					       id::text,
+					       author,
+					       title,
+					       slug,
+					       COALESCE(summary, ''),
+					       COALESCE(tags, '{}'::text[]),
+					       status,
+					       created_at
+				       FROM posts
+				       WHERE status = 'published'
+				       ORDER BY created_at DESC
+				       LIMIT $1 OFFSET $2
+			       `
+	}
 	rows, err := s.pool.Query(ctx, listQuery, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list posts: %w", err)
@@ -68,6 +89,7 @@ func (s *Store) ListPosts(ctx context.Context, limit, offset int) ([]models.Post
 			&post.Slug,
 			&post.Summary,
 			&post.Tags,
+			&post.Status,
 			&post.CreatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan post: %w", err)
@@ -79,14 +101,23 @@ func (s *Store) ListPosts(ctx context.Context, limit, offset int) ([]models.Post
 	}
 
 	var total int
-	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM posts").Scan(&total); err != nil {
-		if err == pgx.ErrNoRows {
-			total = 0
-		} else {
-			return nil, 0, fmt.Errorf("count posts: %w", err)
+	if includeDrafts {
+		if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM posts").Scan(&total); err != nil {
+			if err == pgx.ErrNoRows {
+				total = 0
+			} else {
+				return nil, 0, fmt.Errorf("count posts: %w", err)
+			}
+		}
+	} else {
+		if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM posts WHERE status = 'published'").Scan(&total); err != nil {
+			if err == pgx.ErrNoRows {
+				total = 0
+			} else {
+				return nil, 0, fmt.Errorf("count posts: %w", err)
+			}
 		}
 	}
-
 	return posts, total, nil
 }
 
@@ -95,26 +126,49 @@ func (s *Store) SearchPosts(ctx context.Context, query string, limit, offset int
 		return nil, 0, errors.New("db not initialized")
 	}
 
-	const searchQuery = `
-		SELECT
-			id::text,
-			author,
-			title,
-			slug,
-			COALESCE(summary, ''),
-			COALESCE(tags, '{}'::text[]),
-			created_at
-		FROM posts
-		WHERE title ILIKE '%' || $1 || '%'
-			OR EXISTS (
-				SELECT 1
-				FROM unnest(tags) tag
-				WHERE tag ILIKE '%' || $1 || '%'
-			)
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
-
+	includeDrafts, _ := ctx.Value("includeDrafts").(bool)
+	var searchQuery string
+	if includeDrafts {
+		searchQuery = `
+			       SELECT
+				       id::text,
+				       author,
+				       title,
+				       slug,
+				       COALESCE(summary, ''),
+				       COALESCE(tags, '{}'::text[]),
+				       created_at
+			       FROM posts
+			       WHERE title ILIKE '%' || $1 || '%'
+				       OR EXISTS (
+					       SELECT 1
+					       FROM unnest(tags) tag
+					       WHERE tag ILIKE '%' || $1 || '%'
+				       )
+			       ORDER BY created_at DESC
+			       LIMIT $2 OFFSET $3
+		       `
+	} else {
+		searchQuery = `
+			       SELECT
+				       id::text,
+				       author,
+				       title,
+				       slug,
+				       COALESCE(summary, ''),
+				       COALESCE(tags, '{}'::text[]),
+				       created_at
+			       FROM posts
+			       WHERE (title ILIKE '%' || $1 || '%' OR EXISTS (
+					       SELECT 1
+					       FROM unnest(tags) tag
+					       WHERE tag ILIKE '%' || $1 || '%'
+				       ))
+				       AND status = 'published'
+			       ORDER BY created_at DESC
+			       LIMIT $2 OFFSET $3
+		       `
+	}
 	rows, err := s.pool.Query(ctx, searchQuery, query, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search posts: %w", err)
@@ -141,26 +195,44 @@ func (s *Store) SearchPosts(ctx context.Context, query string, limit, offset int
 		return nil, 0, fmt.Errorf("rows error: %w", err)
 	}
 
-	const countQuery = `
-		SELECT COUNT(*)
-		FROM posts
-		WHERE title ILIKE '%' || $1 || '%'
-			OR EXISTS (
-				SELECT 1
-				FROM unnest(tags) tag
-				WHERE tag ILIKE '%' || $1 || '%'
-			)
-	`
-
 	var total int
-	if err := s.pool.QueryRow(ctx, countQuery, query).Scan(&total); err != nil {
-		if err == pgx.ErrNoRows {
-			total = 0
-		} else {
-			return nil, 0, fmt.Errorf("count search posts: %w", err)
+	if includeDrafts {
+		const countQuery = `
+			       SELECT COUNT(*)
+			       FROM posts
+			       WHERE title ILIKE '%' || $1 || '%'
+				       OR EXISTS (
+					       SELECT 1
+					       FROM unnest(tags) tag
+					       WHERE tag ILIKE '%' || $1 || '%'
+				       )
+		       `
+		if err := s.pool.QueryRow(ctx, countQuery, query).Scan(&total); err != nil {
+			if err == pgx.ErrNoRows {
+				total = 0
+			} else {
+				return nil, 0, fmt.Errorf("count search posts: %w", err)
+			}
+		}
+	} else {
+		const countQuery = `
+			       SELECT COUNT(*)
+			       FROM posts
+			       WHERE (title ILIKE '%' || $1 || '%' OR EXISTS (
+					       SELECT 1
+					       FROM unnest(tags) tag
+					       WHERE tag ILIKE '%' || $1 || '%'
+				       ))
+				       AND status = 'published'
+		       `
+		if err := s.pool.QueryRow(ctx, countQuery, query).Scan(&total); err != nil {
+			if err == pgx.ErrNoRows {
+				total = 0
+			} else {
+				return nil, 0, fmt.Errorf("count search posts: %w", err)
+			}
 		}
 	}
-
 	return posts, total, nil
 }
 
