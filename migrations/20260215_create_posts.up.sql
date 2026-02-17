@@ -1,4 +1,4 @@
--- +goose Up
+-- +migrate Up
 CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     author TEXT NOT NULL,
