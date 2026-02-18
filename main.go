@@ -54,7 +54,7 @@ func main() {
 		loginRateLimiter := appmiddleware.NewRateLimiter(5, time.Minute)
 		r.With(loginRateLimiter.Limit).Post("/login", handlers.Login)
 
-		r.Post("/signup", handlers.Signup)
+		//r.Post("/signup", handlers.Signup)
 
 		// Less restrictive rate limiter: 30 requests per minute per IP for public posts and search
 		publicLimiter := appmiddleware.NewRateLimiter(30, time.Minute)
