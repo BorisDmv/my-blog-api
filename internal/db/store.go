@@ -15,11 +15,6 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-// Pool returns the underlying pgxpool.Pool
-func (s *Store) Pool() *pgxpool.Pool {
-	return s.pool
-}
-
 func NewStore(ctx context.Context, databaseURL string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {

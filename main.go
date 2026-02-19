@@ -29,40 +29,6 @@ func main() {
 	}
 	defer store.Close()
 
-	// Create tables if not exist
-	conn, err := store.Pool().Acquire(ctx)
-	if err != nil {
-		log.Fatalf("failed to acquire db connection: %v", err)
-	}
-	defer conn.Release()
-
-	postsTableSQL := `CREATE TABLE IF NOT EXISTS posts (
-	    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-	    author TEXT NOT NULL,
-	    title TEXT NOT NULL,
-	    slug TEXT NOT NULL UNIQUE,
-	    summary TEXT,
-	    tags TEXT[],
-	    content JSONB NOT NULL,
-	    status TEXT NOT NULL DEFAULT 'draft',
-	    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	);`
-	_, err = conn.Exec(ctx, postsTableSQL)
-	if err != nil {
-		log.Fatalf("failed to create posts table: %v", err)
-	}
-
-	usersTableSQL := `CREATE TABLE IF NOT EXISTS users (
-	    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-	    username TEXT NOT NULL UNIQUE,
-	    password_hash TEXT NOT NULL,
-	    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	);`
-	_, err = conn.Exec(ctx, usersTableSQL)
-	if err != nil {
-		log.Fatalf("failed to create users table: %v", err)
-	}
-
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
