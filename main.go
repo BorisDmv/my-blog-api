@@ -51,7 +51,7 @@ func main() {
 		r.Use(handlers.WithStore(store))
 
 		// In-memory rate limiter: 5 login attempts per minute per IP
-		loginRateLimiter := appmiddleware.NewRateLimiter(5, time.Minute)
+		loginRateLimiter := appmiddleware.NewRateLimiter(3, time.Minute)
 		r.With(loginRateLimiter.Limit).Post("/login", handlers.Login)
 
 		//r.Post("/signup", handlers.Signup)
