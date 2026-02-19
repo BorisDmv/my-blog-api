@@ -331,6 +331,11 @@ func (h *PostsHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "not found")
 		return
 	}
+	// If post is draft, require authentication
+	if post.Status == "draft" && !isAuthenticated(r) {
+		respondError(w, http.StatusUnauthorized, "authentication required for draft posts")
+		return
+	}
 	respondJSON(w, http.StatusOK, post)
 }
 
