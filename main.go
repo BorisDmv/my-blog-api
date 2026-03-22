@@ -21,55 +21,13 @@ import (
 
 func main() {
 	cfg := config.Load()
-	log.Println("Loaded config, starting application...")
 
 	ctx := context.Background()
-	log.Printf("Connecting to database: %s", cfg.DatabaseURL)
 	store, err := db.NewStore(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("db connect failed: %v", err)
 	}
-	log.Println("Database connection established.")
 	defer store.Close()
-
-	// Create tables if not exist
-	log.Println("Acquiring DB connection for table creation...")
-	conn, err := store.Pool().Acquire(ctx)
-	if err != nil {
-		log.Fatalf("failed to acquire db connection: %v", err)
-	}
-	log.Println("DB connection acquired.")
-	defer conn.Release()
-
-	postsTableSQL := `CREATE TABLE IF NOT EXISTS posts (
-		   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		   author TEXT NOT NULL,
-		   title TEXT NOT NULL,
-		   slug TEXT NOT NULL UNIQUE,
-		   summary TEXT,
-		   tags TEXT[],
-		   content JSONB NOT NULL,
-		   status TEXT NOT NULL DEFAULT 'draft',
-		   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	       );`
-	log.Println("Creating posts table if not exists...")
-	_, err = conn.Exec(ctx, postsTableSQL)
-	if err != nil {
-		log.Fatalf("failed to create posts table: %v", err)
-	}
-	log.Println("Posts table checked/created.")
-
-	usersTableSQL := `CREATE TABLE IF NOT EXISTS users (
-		   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		   username TEXT NOT NULL UNIQUE,
-		   password_hash TEXT NOT NULL,
-		   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	       );`
-	log.Println("Creating users table if not exists...")
-	_, err = conn.Exec(ctx, usersTableSQL)
-	if err != nil {
-		log.Fatalf("failed to create users table: %v", err)
-	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
